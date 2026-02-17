@@ -1,0 +1,161 @@
+# Flight Controller Firmware Documentation
+
+## Overview
+This project is a flight controller firmware written in Rust for the STM32F405 microcontroller. It manages sensor data acquisition (IMU, Barometer, Magnetometer, GPS), attitude estimation (AHRS), and altitude/vertical velocity estimation (Kalman Filter). It also handles telemetry output via CRSF (to the RC transmitter) and USB (for debugging/ground station).
+
+## Technology Stack
+- **Language**: Rust (Embedded, `no_std`)
+- **Framework**: `embassy-stm32` (Async/Await runtime for Cortex-M)
+- **Toolchain**: Requires `arm-none-eabi` cross-compiler
+- **Debugging**: `defmt` for efficient logging
+
+## Hardware Specifications
+
+### Microcontroller
+- **Part**: STM32F405RG
+- **Clock**: Derived from 25MHz external crystal (HSE)
+- **USB**: Using built-in USB OTG FS peripheral
+
+### Sensors & Peripherals
+
+| Component | Interface | Description | Pinout | Driver |
+| :--- | :--- | :--- | :--- | :--- |
+| **ICM-42688-P** | SPI1 | 6-Axis IMU (Gyro + Accel) | SCK:PA5, MISO:PA6, MOSI:PA7, CS:PB12 | `src/drivers/icm42688.rs` |
+| **SPL06-001** | I2C1 | Barometric Pressure Sensor | SCL:PB8, SDA:PB9 | `src/drivers/spl06.rs` |
+| **HMC5883L** | I2C1 | 3-Axis Magnetometer | SCL:PB8, SDA:PB9 | `src/drivers/hmc5883.rs` |
+| **W25Qxx** | SPI3 | External Flash Memory (Logging) | SCK:PC10, MISO:PC11, MOSI:PC12, CS:PB3 | `src/drivers/flash.rs` |
+| **GPS Module** | UART4 | GNSS Receiver (NMEA) | TX:PA0, RX:PA1 | `src/drivers/gps.rs` |
+| **CRSF/ELRS** | USART3 | RC Receiver / Telemetry | TX:PB10, RX:PB11 | `src/drivers/crsf.rs` |
+| **Battery Voltage** | ADC1 | Voltage Divider (11:1 scale) | Pin: PC3 (ADC1_IN13) | Directly in `main.rs` |
+| **Status LED** | GPIO | Heartbeat / Status Indication | Pin: PC13 (Active Low?) | `src/main.rs` |
+
+### DMA Channels (Embassy Configuration)
+- **I2C1**: DMA1_CH7 (Tx), DMA1_CH0 (Rx) (Note: Adjusted to avoid conflict with USART2/USART3 if needed)
+- **UART4**: DMA1_CH4 (Tx), DMA1_CH2 (Rx)
+- **USART3**: DMA1_CH3 (Tx), DMA1_CH1 (Rx)
+- **SPI1/SPI3**: Blocking (NoDma) for currently implemented drivers (initially)
+
+## Software Architecture
+
+### Core Logic (`src/main.rs`)
+The firmware runs an `embassy_executor` driven by `SystemTimer`.
+1.  **Initialization**: Sets up clocks (HSE), USB, I2C1, SPI1, SPI3, UART4, USART3.
+2.  **Tasks**:
+    - `main` task: Performs sensor fusion, filtering, and telemetry broadcasting.
+    - `usb_task`: Handles USB interrupts and data transfer.
+3.  **Main Loop (approx. 50-100Hz effective loop in `main.rs`)**:
+    - Reads **IMU** (Accel/Gyro).
+    - Reads **Magnetometer** (HMC5883L).
+    - Reads **Barometer** (SPL06) if ready.
+    - Processes **GPS** NMEA sentences from UART buffer.
+    - Processes **CRSF** RC channels from UART buffer.
+    - Runs **Filters**:
+        - Gyro: PT1 Low-Pass Filter (10Hz Cutoff).
+        - Accel: Biquad Low-Pass Filter (5Hz Cutoff).
+        - Baro: Simple Exponential Smoothing (Alpha 0.2).
+    - Updates **AHRS` (Mahony Filter)**: Fuses Gyro, Accel, Mag (9-DOF) to get Quaternion orientation.
+    - Updates **Kalman Filter**: Fuses Vertical Acceleration (Earth-frame, gravity compensated) + Baro Altitude to estimate Altitude and Vertical Velocity.
+    - Sends **Telemetry**:
+        - **USB**: Custom ASCII format: `@T<temp>P<press>A<alt>v<vel>l<lon>L<lat>...`
+        - **CRSF**: Battery, GPS, Attitude, Vario, Baro packets sent back to RC transmitter.
+
+### Algorithms
+
+#### AHRS (Mahony Filter) (`src/drivers/ahrs.rs`)
+- **Type**: Nonlinear Complementary Filter (Mahony).
+- **Inputs**: Gyro (Rad/s), Accel (G), Mag (Normalized).
+- **Features**: 9-DOF Sensor Fusion. Uses magnetometer to correct Yaw drift.
+- **Output**: Quaternion representing Earth-to-Body rotation.
+
+#### Vertical Kalman Filter (`src/drivers/kalman.rs`)
+- **State**: [Position (Altitude), Velocity (Vertical Speed)].
+- **Prediction**: Driven by Vertical Acceleration (Z-axis in Earth Frame - 1G).
+- **Update**: Corrected by Barometric Altitude measurements.
+- **Goal**: Smooth altitude readings and responsive vertical speed (vario) indication.
+
+#### Signal Processing (`src/drivers/filter.rs`)
+- **LowPassFilter**: Simple Exponential Moving Average ($y = \alpha x + (1-\alpha) y_{prev}$).
+- **Pt1Filter**: First-order Low Pass filter configured by Cutoff Frequency (Hz) and Sample Rate.
+- **BiquadFilter**: Second-order IIR Filter (Direct Form 2 Transposed), configured for LPF with specific Q-factor (Butterworth).
+
+## Project Structure
+
+```
+├── Cargo.toml            # Dependencies and Build config
+├── src
+│   ├── main.rs           # Entry point, loop, hardware ownership
+│   ├── board.rs          # RCC/Clock setup
+│   ├── usb.rs            # USB Device handling
+│   └── drivers
+│       ├── mod.rs        # Driver exports
+│       ├── ahrs.rs       # Mahony AHRS Algorithm
+│       ├── kalman.rs     # Vertical Kalman Filter
+│       ├── filter.rs     # DSP Filters (LPF, PT1, Biquad)
+│       ├── icm42688.rs   # IMU Driver (SPI)
+│       ├── spl06.rs      # Barometer Driver (I2C)
+│       ├── hmc5883.rs    # Magnetometer Driver (I2C) - *Recently Added*
+│       ├── gps.rs        # NMEA Parser
+│       ├── crsf.rs       # CRSF Protocol Parser & Telemetry
+│       └── flash.rs      # W25Qxx Flash Driver (SPI)
+```
+
+## Setup & Building
+
+1.  **Install Rust**: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+2.  **Add Target**: `rustup target add thumbv7em-none-eabihf`
+3.  **Install Probe-rs** (for flashing): `cargo install probe-rs --features cli`
+4.  **Build**: `cargo build --release`
+5.  **Run/Flash**: `cargo run --release` (Assumes ST-Link or similar probe connected)
+
+## Telemetry Packet Implementation (CRSF)
+
+The firmware transmits CRSF telemetry frames interleaved in the main loop (approx. 20Hz loop, but effective telemetry tick rate depends on `crsf_telemetry_tick` incrementing every cycle).
+
+### Scheduling Logic
+The system uses a `crsf_telemetry_tick` counter that wraps around every 30 cycles. Assuming a loop time of ~50ms (20Hz), a full cycle takes ~1.5 seconds.
+
+| Packet Type | ID | Frequency (Ticks) | Approx Rate | Payload Description |
+| :--- | :--- | :--- | :--- | :--- |
+| **GPS** | `0x02` | `Tick % 5 == 0` | ~4 Hz | Lat, Lon, Speed, Heading, Alt, Sats |
+| **Attitude** | `0x1E` | `Tick % 5 == 1` | ~4 Hz | Pitch, Roll, Yaw (Euler Angles) |
+| **Vario** | `0x09` | `Tick % 5 == 3` | ~4 Hz | Altitude (dm), Vertical Speed (cm/s) |
+| **Battery** | `0x08` | `Tick % 30 == 2` | ~0.66 Hz | Voltage (0.1V steps), Current, Capacity |
+| **Barometer** | `0x11` | `Tick % 30 == 4` | ~0.66 Hz | Pressure (Pa), Temp (0.01 °C) |
+| **Flight Mode** | `0x21` | `Tick % 30 == 29` | ~0.66 Hz | Cycling String (Mode Name / Satellite List) |
+
+### Packet Details
+
+#### 1. GPS (`0x02`)
+Contains position and velocity data derived from the parsed NMEA (`$GNRMC`, `$GNGSA`) sentences.
+- **Latitude**: `i32` (Decimal Degrees * 10,000,000), Big Endian.
+- **Longitude**: `i32` (Decimal Degrees * 10,000,000), Big Endian.
+- **Speed**: `u16` (km/h * 10), Big Endian. Derived from NMEA Speed (Knots * 1.852).
+- **Heading**: `u16` (Degrees * 100), Big Endian. Derived from NMEA Course.
+- **Altitude**: `u16` (Meters + 1000), Big Endian.
+- **Satellites**: `u8` count.
+
+#### 2. Flight Mode (`0x21`)
+Used to transmit custom status text. The content cycles every 1.5 seconds (at the ~0.66Hz rate, effective toggle every ~3s if toggle per cycle):
+- **Cycle A**: "ROCKET" (Current Flight Mode).
+- **Cycle B**: "S: 5 12 24..." (List of Active Satellite IDs parsed from `$GNGSA`).
+
+#### 3. Attitude (`0x1E`)
+Orientation from AHRS (Mahony Filter).
+- **Pitch**: `i16` (Radians * 10000), Big Endian.
+- **Roll**: `i16` (Radians * 10000), Big Endian.
+- **Yaw**: `i16` (Radians * 10000), Big Endian.
+
+#### 4. Vario (`0x09`)
+Fused altitude and vertical velocity from Kalman Filter.
+- **Altitude**: `u16` (Decimeters + 10000), Big Endian. (0m = 10000).
+- **Vertical Speed**: `i16` (cm/s), Big Endian.
+
+#### 5. Barometer (`0x11`)
+Raw sensor data from SPL06.
+- **Pressure**: `u32` (Pascals), Big Endian.
+- **Temperature**: `i16` (Celsius * 100), Big Endian.
+
+#### 6. Battery (`0x08`)
+System voltage.
+- **Voltage**: `u16` (Volts * 10), Big Endian. (e.g., 125 = 12.5V).
+- **Current/Capacity**: Currently hardcoded/stubbed.

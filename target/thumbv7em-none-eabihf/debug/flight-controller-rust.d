@@ -1,0 +1,1 @@
+/home/bestsage/Documents/Rocket_mcu/target/thumbv7em-none-eabihf/debug/flight-controller-rust: /home/bestsage/Documents/Rocket_mcu/src/board.rs /home/bestsage/Documents/Rocket_mcu/src/drivers/icm42688.rs /home/bestsage/Documents/Rocket_mcu/src/drivers/mod.rs /home/bestsage/Documents/Rocket_mcu/src/main.rs /home/bestsage/Documents/Rocket_mcu/src/usb.rs

@@ -1,0 +1,1 @@
+Spl06<'_, I2C1, NoDma, NoDma>

@@ -1,0 +1,14 @@
+/home/bestsage/Documents/Rocket_mcu/target/thumbv7em-none-eabihf/release/deps/serde-2469616824f9605d.d: /home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/bestsage/Documents/Rocket_mcu/target/thumbv7em-none-eabihf/release/build/serde-824508dd4f64ac46/out/private.rs
+
+/home/bestsage/Documents/Rocket_mcu/target/thumbv7em-none-eabihf/release/deps/libserde-2469616824f9605d.rlib: /home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/bestsage/Documents/Rocket_mcu/target/thumbv7em-none-eabihf/release/build/serde-824508dd4f64ac46/out/private.rs
+
+/home/bestsage/Documents/Rocket_mcu/target/thumbv7em-none-eabihf/release/deps/libserde-2469616824f9605d.rmeta: /home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/bestsage/Documents/Rocket_mcu/target/thumbv7em-none-eabihf/release/build/serde-824508dd4f64ac46/out/private.rs
+
+/home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/bestsage/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/home/bestsage/Documents/Rocket_mcu/target/thumbv7em-none-eabihf/release/build/serde-824508dd4f64ac46/out/private.rs:
+
+# env-dep:OUT_DIR=/home/bestsage/Documents/Rocket_mcu/target/thumbv7em-none-eabihf/release/build/serde-824508dd4f64ac46/out

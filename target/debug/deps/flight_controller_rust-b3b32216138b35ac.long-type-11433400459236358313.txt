@@ -1,0 +1,1 @@
+RxDma: embassy_stm32::spi::RxDma<T>

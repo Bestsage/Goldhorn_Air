@@ -1,0 +1,4 @@
+NoDma: embassy_stm32::i2c::TxDma<I2C1>
+embassy_stm32::i2c::TxDma<I2C3>
+embassy_stm32::i2c::TxDma<I2C1>
+embassy_stm32::i2c::TxDma<I2C2>

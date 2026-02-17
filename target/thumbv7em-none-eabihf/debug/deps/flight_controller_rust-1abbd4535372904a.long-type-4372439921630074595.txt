@@ -1,0 +1,3 @@
+Irqs: Binding<embassy_stm32::interrupt::typelevel::USART3, embassy_stm32::usart::InterruptHandler<embassy_stm32::peripherals::USART3>>
+Binding<embassy_stm32::interrupt::typelevel::USART1, embassy_stm32::usart::InterruptHandler<embassy_stm32::peripherals::USART1>>
+Binding<embassy_stm32::interrupt::typelevel::USART2, embassy_stm32::usart::InterruptHandler<embassy_stm32::peripherals::USART2>>
