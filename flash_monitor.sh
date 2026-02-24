@@ -10,11 +10,43 @@ SERIAL_PORT="/dev/ttyACM0"
 
 echo "[1/3] Building Project..."
 
+# Ensure embedded target is installed
+TARGET_TRIPLE="thumbv7em-none-eabihf"
+if command -v rustup &> /dev/null; then
+    if ! rustup target list --installed | grep -q "^${TARGET_TRIPLE}$"; then
+        echo "  Rust target ${TARGET_TRIPLE} missing. Installing..."
+        rustup target add ${TARGET_TRIPLE}
+    fi
+else
+    echo "  rustup not found in PATH."
+    if ! rustc --print target-libdir --target ${TARGET_TRIPLE} >/dev/null 2>&1; then
+        echo "❌ Error: target ${TARGET_TRIPLE} is not available and rustup is missing."
+        echo "   Install rustup, then run: rustup target add ${TARGET_TRIPLE}"
+        if command -v pacman &> /dev/null; then
+            echo "   Arch Linux detected. Run:"
+            echo "     sudo pacman -S --needed rustup"
+            echo "     rustup default stable"
+            echo "     rustup target add ${TARGET_TRIPLE}"
+        else
+            echo "   Quick install: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
+        fi
+        exit 1
+    fi
+fi
+
 # Check for cargo-binutils
 if ! cargo --list | grep -q "objcopy"; then
-    echo "  'cargo objcopy' not found. Installing cargo-binutils..."
-    cargo install cargo-binutils
-    rustup component add llvm-tools-preview
+    if command -v rustup &> /dev/null; then
+        echo "  'cargo objcopy' not found. Installing cargo-binutils..."
+        cargo install cargo-binutils
+        rustup component add llvm-tools-preview
+    else
+        echo "❌ Error: 'cargo objcopy' not found and rustup is missing."
+        echo "   Install rustup first, then run:"
+        echo "     cargo install cargo-binutils"
+        echo "     rustup component add llvm-tools-preview"
+        exit 1
+    fi
 fi
 
 # Build and create binary

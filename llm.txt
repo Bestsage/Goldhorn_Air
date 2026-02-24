@@ -1,161 +1,430 @@
-# Flight Controller Firmware Documentation
+# Goldhorn_Air - LLM Reference (Documentation Complète)
 
-## Overview
-This project is a flight controller firmware written in Rust for the STM32F405 microcontroller. It manages sensor data acquisition (IMU, Barometer, Magnetometer, GPS), attitude estimation (AHRS), and altitude/vertical velocity estimation (Kalman Filter). It also handles telemetry output via CRSF (to the RC transmitter) and USB (for debugging/ground station).
+Version de ce document: 2026-02-22
+Statut firmware: DShot TAB verrouillé en sécurité (sortie forcée à 0)
 
-## Technology Stack
-- **Language**: Rust (Embedded, `no_std`)
-- **Framework**: `embassy-stm32` (Async/Await runtime for Cortex-M)
-- **Toolchain**: Requires `arm-none-eabi` cross-compiler
-- **Debugging**: `defmt` for efficient logging
+---
 
-## Hardware Specifications
+## 1) Résumé exécutif
 
-### Microcontroller
-- **Part**: STM32F405RG
-- **Clock**: Derived from 25MHz external crystal (HSE)
-- **USB**: Using built-in USB OTG FS peripheral
+Ce dépôt contient un firmware Rust embarqué (no_std) pour STM32F405RG.
+Il gère:
+- Acquisition capteurs: IMU, baromètre, magnétomètre
+- Estimation d'attitude (AHRS Mahony)
+- Estimation altitude/vitesse verticale (Kalman vertical)
+- Télémetrie USB + CRSF
+- Commande moteur TAB via DShot300 sur un port moteur Betaflight
 
-### Sensors & Peripherals
+Point critique actuel:
+- Le moteur TAB est désactivé par sécurité logicielle.
+- `ESC_OUTPUT_LOCKED = true` dans `src/main.rs` force la commande DShot à 0.
 
-| Component | Interface | Description | Pinout | Driver |
-| :--- | :--- | :--- | :--- | :--- |
-| **ICM-42688-P** | SPI1 | 6-Axis IMU (Gyro + Accel) | SCK:PA5, MISO:PA6, MOSI:PA7, CS:PB12 | `src/drivers/icm42688.rs` |
-| **SPL06-001** | I2C1 | Barometric Pressure Sensor | SCL:PB8, SDA:PB9 | `src/drivers/spl06.rs` |
-| **HMC5883L** | I2C1 | 3-Axis Magnetometer | SCL:PB8, SDA:PB9 | `src/drivers/hmc5883.rs` |
-| **W25Qxx** | SPI3 | External Flash Memory (Logging) | SCK:PC10, MISO:PC11, MOSI:PC12, CS:PB3 | `src/drivers/flash.rs` |
-| **GPS Module** | UART4 | GNSS Receiver (NMEA) | TX:PA0, RX:PA1 | `src/drivers/gps.rs` |
-| **CRSF/ELRS** | USART3 | RC Receiver / Telemetry | TX:PB10, RX:PB11 | `src/drivers/crsf.rs` |
-| **Battery Voltage** | ADC1 | Voltage Divider (11:1 scale) | Pin: PC3 (ADC1_IN13) | Directly in `main.rs` |
-| **Status LED** | GPIO | Heartbeat / Status Indication | Pin: PC13 (Active Low?) | `src/main.rs` |
+---
 
-### DMA Channels (Embassy Configuration)
-- **I2C1**: DMA1_CH7 (Tx), DMA1_CH0 (Rx) (Note: Adjusted to avoid conflict with USART2/USART3 if needed)
-- **UART4**: DMA1_CH4 (Tx), DMA1_CH2 (Rx)
-- **USART3**: DMA1_CH3 (Tx), DMA1_CH1 (Rx)
-- **SPI1/SPI3**: Blocking (NoDma) for currently implemented drivers (initially)
+## 2) Arborescence utile
 
-## Software Architecture
+- `src/main.rs` : orchestration complète, init hardware, boucle de vol, télémétrie, logique de commande TAB
+- `src/board.rs` : configuration clocks RCC (HSE 8 MHz -> SYSCLK 168 MHz)
+- `src/usb.rs` : initialisation USB CDC
+- `src/drivers/mod.rs` : exports des modules
+- `src/drivers/icm42688.rs` : IMU SPI
+- `src/drivers/spl06.rs` : baromètre I2C
+- `src/drivers/hmc5883.rs` : magnétomètre I2C
+- `src/drivers/ahrs.rs` : AHRS Mahony + quaternion + Euler
+- `src/drivers/kalman.rs` : Kalman vertical (position + vitesse)
+- `src/drivers/filter.rs` : filtres LPF/PT1/Biquad
+- `src/drivers/gps.rs` : parser NMEA
+- `src/drivers/crsf.rs` : parser RC CRSF + encode télémetrie CRSF
+- `src/drivers/roll.rs` : contrôleurs roll/tab + mappings CRSF/DShot
+- `src/drivers/dshot.rs` : driver DShot300 bit-bang
+- `.cargo/config.toml` : target embarquée et runner
+- `flash_monitor.sh` : build binaire + flash DFU + moniteur série
+- `BTFL_cli_20260126_153309_JHEF405PRO.txt` : dump Betaflight (mapping ressources)
 
-### Core Logic (`src/main.rs`)
-The firmware runs an `embassy_executor` driven by `SystemTimer`.
-1.  **Initialization**: Sets up clocks (HSE), USB, I2C1, SPI1, SPI3, UART4, USART3.
-2.  **Tasks**:
-    - `main` task: Performs sensor fusion, filtering, and telemetry broadcasting.
-    - `usb_task`: Handles USB interrupts and data transfer.
-3.  **Main Loop (approx. 50-100Hz effective loop in `main.rs`)**:
-    - Reads **IMU** (Accel/Gyro).
-    - Reads **Magnetometer** (HMC5883L).
-    - Reads **Barometer** (SPL06) if ready.
-    - Processes **GPS** NMEA sentences from UART buffer.
-    - Processes **CRSF** RC channels from UART buffer.
-    - Runs **Filters**:
-        - Gyro: PT1 Low-Pass Filter (10Hz Cutoff).
-        - Accel: Biquad Low-Pass Filter (5Hz Cutoff).
-        - Baro: Simple Exponential Smoothing (Alpha 0.2).
-    - Updates **AHRS` (Mahony Filter)**: Fuses Gyro, Accel, Mag (9-DOF) to get Quaternion orientation.
-    - Updates **Kalman Filter**: Fuses Vertical Acceleration (Earth-frame, gravity compensated) + Baro Altitude to estimate Altitude and Vertical Velocity.
-    - Sends **Telemetry**:
-        - **USB**: Custom ASCII format: `@T<temp>P<press>A<alt>v<vel>l<lon>L<lat>...`
-        - **CRSF**: Battery, GPS, Attitude, Vario, Baro packets sent back to RC transmitter.
+---
 
-### Algorithms
+## 3) Environnement build et toolchain
 
-#### AHRS (Mahony Filter) (`src/drivers/ahrs.rs`)
-- **Type**: Nonlinear Complementary Filter (Mahony).
-- **Inputs**: Gyro (Rad/s), Accel (G), Mag (Normalized).
-- **Features**: 9-DOF Sensor Fusion. Uses magnetometer to correct Yaw drift.
-- **Output**: Quaternion representing Earth-to-Body rotation.
+### 3.1 Target Rust
+- Target compilée: `thumbv7em-none-eabihf`
+- Déclarée dans `.cargo/config.toml`
 
-#### Vertical Kalman Filter (`src/drivers/kalman.rs`)
-- **State**: [Position (Altitude), Velocity (Vertical Speed)].
-- **Prediction**: Driven by Vertical Acceleration (Z-axis in Earth Frame - 1G).
-- **Update**: Corrected by Barometric Altitude measurements.
-- **Goal**: Smooth altitude readings and responsive vertical speed (vario) indication.
+### 3.2 Outils nécessaires
+- Rust + Cargo
+- Rustup (fortement recommandé)
+- target `thumbv7em-none-eabihf`
+- `cargo-binutils` + `llvm-tools-preview` (pour `cargo objcopy`)
+- `dfu-util` (flash DFU)
 
-#### Signal Processing (`src/drivers/filter.rs`)
-- **LowPassFilter**: Simple Exponential Moving Average ($y = \alpha x + (1-\alpha) y_{prev}$).
-- **Pt1Filter**: First-order Low Pass filter configured by Cutoff Frequency (Hz) and Sample Rate.
-- **BiquadFilter**: Second-order IIR Filter (Direct Form 2 Transposed), configured for LPF with specific Q-factor (Butterworth).
+### 3.3 Cas Arch Linux
+Si `rustup` absent mais `rustc/cargo` système présents:
+1. `sudo pacman -S --needed rustup`
+2. `rustup default stable`
+3. `rustup target add thumbv7em-none-eabihf`
+4. `cargo install cargo-binutils`
+5. `rustup component add llvm-tools-preview`
 
-## Project Structure
+Le script `flash_monitor.sh` détecte désormais ce scénario et affiche des instructions explicites.
 
-```
-├── Cargo.toml            # Dependencies and Build config
-├── src
-│   ├── main.rs           # Entry point, loop, hardware ownership
-│   ├── board.rs          # RCC/Clock setup
-│   ├── usb.rs            # USB Device handling
-│   └── drivers
-│       ├── mod.rs        # Driver exports
-│       ├── ahrs.rs       # Mahony AHRS Algorithm
-│       ├── kalman.rs     # Vertical Kalman Filter
-│       ├── filter.rs     # DSP Filters (LPF, PT1, Biquad)
-│       ├── icm42688.rs   # IMU Driver (SPI)
-│       ├── spl06.rs      # Barometer Driver (I2C)
-│       ├── hmc5883.rs    # Magnetometer Driver (I2C) - *Recently Added*
-│       ├── gps.rs        # NMEA Parser
-│       ├── crsf.rs       # CRSF Protocol Parser & Telemetry
-│       └── flash.rs      # W25Qxx Flash Driver (SPI)
-```
+---
 
-## Setup & Building
+## 4) Horloges et plateforme MCU
 
-1.  **Install Rust**: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-2.  **Add Target**: `rustup target add thumbv7em-none-eabihf`
-3.  **Install Probe-rs** (for flashing): `cargo install probe-rs --features cli`
-4.  **Build**: `cargo build --release`
-5.  **Run/Flash**: `cargo run --release` (Assumes ST-Link or similar probe connected)
+Défini dans `src/board.rs`:
+- HSE = 8 MHz
+- PLL: prediv /4, mul x168, divP /2
+- SYSCLK = 168 MHz
+- AHB prescaler = DIV1
+- APB1 = DIV4
+- APB2 = DIV2
+- USB via PLLQ /7 (48 MHz)
 
-## Telemetry Packet Implementation (CRSF)
+---
 
-The firmware transmits CRSF telemetry frames interleaved in the main loop (approx. 20Hz loop, but effective telemetry tick rate depends on `crsf_telemetry_tick` incrementing every cycle).
+## 5) Mapping hardware réel (code + Betaflight)
 
-### Scheduling Logic
-The system uses a `crsf_telemetry_tick` counter that wraps around every 30 cycles. Assuming a loop time of ~50ms (20Hz), a full cycle takes ~1.5 seconds.
+### 5.1 Bus et capteurs
+- I2C1: PB8 (SCL), PB9 (SDA)
+  - SPL06 (baro)
+  - HMC5883 (mag)
+- SPI1: PA5 SCK / PA7 MOSI / PA6 MISO / PB12 CS
+  - ICM42688
+- SPI3: PC10 SCK / PC12 MOSI / PC11 MISO / PB3 CS
+  - Flash W25Qxx
 
-| Packet Type | ID | Frequency (Ticks) | Approx Rate | Payload Description |
-| :--- | :--- | :--- | :--- | :--- |
-| **GPS** | `0x02` | `Tick % 5 == 0` | ~4 Hz | Lat, Lon, Speed, Heading, Alt, Sats |
-| **Attitude** | `0x1E` | `Tick % 5 == 1` | ~4 Hz | Pitch, Roll, Yaw (Euler Angles) |
-| **Vario** | `0x09` | `Tick % 5 == 3` | ~4 Hz | Altitude (dm), Vertical Speed (cm/s) |
-| **Battery** | `0x08` | `Tick % 30 == 2` | ~0.66 Hz | Voltage (0.1V steps), Current, Capacity |
-| **Barometer** | `0x11` | `Tick % 30 == 4` | ~0.66 Hz | Pressure (Pa), Temp (0.01 °C) |
-| **Flight Mode** | `0x21` | `Tick % 30 == 29` | ~0.66 Hz | Cycling String (Mode Name / Satellite List) |
+### 5.2 UART
+- GPS: USART3, RX PB11 / TX PB10, 9600 bauds
+- CRSF/ELRS: UART4, RX PA1 / TX PA0, 420000 bauds
 
-### Packet Details
+### 5.3 ADC et GPIO
+- VBat: PC3 (ADC1_IN13), ratio de conversion utilisé: x11.0
+- LED heartbeat: PC13
 
-#### 1. GPS (`0x02`)
-Contains position and velocity data derived from the parsed NMEA (`$GNRMC`, `$GNGSA`) sentences.
-- **Latitude**: `i32` (Decimal Degrees * 10,000,000), Big Endian.
-- **Longitude**: `i32` (Decimal Degrees * 10,000,000), Big Endian.
-- **Speed**: `u16` (km/h * 10), Big Endian. Derived from NMEA Speed (Knots * 1.852).
-- **Heading**: `u16` (Degrees * 100), Big Endian. Derived from NMEA Course.
-- **Altitude**: `u16` (Meters + 1000), Big Endian.
-- **Satellites**: `u8` count.
+### 5.4 Port moteur TAB choisi
+Depuis le dump Betaflight:
+- `resource MOTOR 1 B00`
+- Timer associé: TIM3 CH3 (AF2)
 
-#### 2. Flight Mode (`0x21`)
-Used to transmit custom status text. The content cycles every 1.5 seconds (at the ~0.66Hz rate, effective toggle every ~3s if toggle per cycle):
-- **Cycle A**: "ROCKET" (Current Flight Mode).
-- **Cycle B**: "S: 5 12 24..." (List of Active Satellite IDs parsed from `$GNGSA`).
+Le firmware utilise ce port:
+- DShot TAB: PB0 (`src/main.rs` + `src/drivers/dshot.rs`)
 
-#### 3. Attitude (`0x1E`)
-Orientation from AHRS (Mahony Filter).
-- **Pitch**: `i16` (Radians * 10000), Big Endian.
-- **Roll**: `i16` (Radians * 10000), Big Endian.
-- **Yaw**: `i16` (Radians * 10000), Big Endian.
+### 5.5 Partie Ground Hardware (détaillée)
 
-#### 4. Vario (`0x09`)
-Fused altitude and vertical velocity from Kalman Filter.
-- **Altitude**: `u16` (Decimeters + 10000), Big Endian. (0m = 10000).
-- **Vertical Speed**: `i16` (cm/s), Big Endian.
+Cette section décrit **le hardware côté sol / banc** requis pour exploiter le dépôt, avec distinction claire entre:
+- **Architecture A (active dans `src/main.rs`)**: STM32 -> ESC BLHeli/Bluejay en DShot300 sur PB0
+- **Architecture B (alternative dans `esp32_c3_tab_controller/`)**: STM32 (ou autre main board) -> ESP32-C3 -> driver STEP/DIR -> NEMA17
 
-#### 5. Barometer (`0x11`)
-Raw sensor data from SPL06.
-- **Pressure**: `u32` (Pascals), Big Endian.
-- **Temperature**: `i16` (Celsius * 100), Big Endian.
+#### 5.5.1 Composants (BOM) — Architecture A (DShot direct)
 
-#### 6. Battery (`0x08`)
-System voltage.
-- **Voltage**: `u16` (Volts * 10), Big Endian. (e.g., 125 = 12.5V).
-- **Current/Capacity**: Currently hardcoded/stubbed.
+Indispensables:
+- 1x FC STM32F405RG (JHEF405 Pro d'après le projet)
+- 1x ESC compatible DShot (Bluejay/BLHeli32), configuré pour usage 3D si commande signée
+- 1x moteur du TAB (BLDC)
+- 1x récepteur ELRS/CRSF (UART4)
+- 1x source alim principale (LiPo) + régulation FC
+- 1x USB vers PC (télémétrie CDC)
+
+Capteurs exploités par le code:
+- ICM42688 (IMU) sur SPI1
+- SPL06 (baro) sur I2C1
+- HMC5883 (mag) sur I2C1
+- GPS NMEA sur USART3
+
+#### 5.5.2 Branchement précis — Architecture A (DShot direct)
+
+Main board STM32F405:
+- TAB DShot: PB0 -> signal ESC (port Betaflight MOTOR1, `resource MOTOR 1 B00`)
+- GND FC -> GND ESC (référence commune impérative)
+- VBat: PC3 (ADC1_IN13) via diviseur (ratio code x11.0)
+- USB: PA12/PA11 (USB FS)
+- ELRS/CRSF: UART4 RX PA1 / TX PA0
+- GPS: USART3 RX PB11 / TX PB10
+- I2C capteurs: PB8/PB9
+- IMU SPI1: PA5/PA6/PA7 + CS PB12
+- Flash SPI3: PC10/PC11/PC12 + CS PB3
+
+Règles de câblage critiques:
+- Masse commune entre tous les blocs logiques (FC, ESC, RX, GPS, capteurs)
+- Ligne DShot PB0 courte/propre, éviter passage parallèle puissance
+- Alimentation ESC/moteur séparée des rails capteurs si possible
+- Vérifier polarité et continuité avant mise sous tension
+
+#### 5.5.3 Composants (BOM) — Architecture B (ESP32-C3 Stepper)
+
+Dans `esp32_c3_tab_controller/`:
+- 1x ESP32-C3 Super Mini
+- 1x driver STEP/DIR/EN (A4988, DRV8825, TMC en mode STEP-DIR)
+- 1x NEMA17
+- 1x alimentation moteur dédiée (selon couple/vitesse)
+- 1x liaison UART entre main board et ESP32-C3
+
+#### 5.5.4 Branchement précis — Architecture B (ESP32-C3 Stepper)
+
+ESP32-C3 vers driver:
+- GPIO4 -> STEP
+- GPIO5 -> DIR
+- GPIO6 -> EN (actif LOW)
+
+UART contrôle:
+- ESP32 GPIO21 (TX) -> RX main board
+- ESP32 GPIO20 (RX) <- TX main board
+- GND ESP32 <-> GND main board (obligatoire)
+
+Notes alim:
+- Driver/NEMA17 alimentés séparément de l'ESP32
+- ESP32 alimenté proprement (USB 5V ou régulateur dédié)
+
+#### 5.5.5 Comment fonctionne le code — Architecture A (`src/main.rs`)
+
+Chaîne fonctionnelle (réel firmware principal):
+1. Init clocks/USB/bus (I2C, SPI1, SPI3, UART3, UART4, ADC)
+2. Init capteurs + calibration (baro sol, biais IMU)
+3. Boucle ~20 Hz:
+  - lecture IMU + filtres
+  - update AHRS 9DOF
+  - calcul accel verticale + Kalman vertical
+  - lecture CRSF (RC) + GPS
+  - calcul consigne TAB depuis contrôle roll
+4. Conversion TAB -> commande ESC:
+  - `signed_unit_to_dshot_3d()` pour transformer commande signée [-1..1] en DShot 3D
+  - stockage dans `TAB_MOTOR_DSHOT_CMD`
+5. Task dédiée `dshot_tab_task` à 1 kHz:
+  - envoie continu DShot300 sur PB0
+  - si `ESC_OUTPUT_LOCKED == true`, force command `0`
+
+Sécurité effective actuelle:
+- `ESC_OUTPUT_LOCKED` est à `true` dans le code actuel
+- même avec RC armé, le moteur TAB reste à 0 tant que ce verrou n'est pas retiré
+
+#### 5.5.6 Comment fonctionne le code — Architecture B (`esp32_c3_tab_controller.ino`)
+
+Chaîne fonctionnelle (firmware auxiliaire):
+1. Boot ESP32: sorties configurées, driver désactivé par défaut (`EN` inactif)
+2. UART 115200: parser commandes ASCII
+  - `EN 1|0`, `SET <deg>`, `HOME`, `PING`
+3. Boucle contrôle:
+  - clamp angle TAB à ±20°
+  - conversion degrés TAB -> steps moteur via `GEAR_RATIO`, `MICROSTEP`, `FULL_STEPS_PER_REV`
+  - rampe accel/vitesse (`MAX_ACCEL_STEPS_S2`, `MAX_SPEED_STEPS_S`)
+  - génération impulsions STEP et direction DIR
+4. Failsafe liaison:
+  - timeout `CMD_TIMEOUT_MS=300` ms sans commande valide -> `EN 0`
+5. Statut:
+  - publication `STAT ...` toutes les 100 ms
+
+Important:
+- Cette architecture B est fournie dans le dépôt mais **n'est pas pilotée par `src/main.rs` actuellement**
+- c'est une base alternative pour remplacement de l'ESC BLDC par actionneur pas-à-pas
+
+---
+
+## 6) Runtime, tâches et fréquence
+
+### 6.1 Tâches Embassy
+- `main` : boucle principale capteurs/fusion/contrôle/télémétrie
+- `usb_task` : service USB CDC
+- `dshot_tab_task` : envoi DShot à période fixe
+
+### 6.2 Fréquences principales
+- Boucle principale: ~20 Hz (`Timer::after(50 ms)`)
+- Task DShot: 1 kHz (`Timer::after(1000 us)`)
+
+Note: l'envoi DShot à 20 Hz était insuffisant pour un ESC. Le passage à 1 kHz corrige ce point architectural.
+
+---
+
+## 7) Chaîne de traitement capteurs
+
+## 7.1 Calibration initiale
+- Baro: moyenne de 10 échantillons pour altitude sol (`ground_alt`)
+- IMU: 100 échantillons pour biais accel/gyro
+- Correction accel Z ajustée pour 1g nominal
+
+## 7.2 Filtrage
+- Gyro: PT1 10 Hz
+- Accel: Biquad LPF 5 Hz, Q=0.707
+- Accel verticale linéaire: LPF alpha=0.5
+- Altitude baro: LPF alpha=0.2
+
+## 7.3 Fusion attitude
+- Mahony 9DOF (`update_9dof`) avec gyro+accel+mag
+- Conversion quaternion -> Euler utilisée pour roll/pitch/yaw
+
+## 7.4 Estimation verticale
+- Kalman vertical 2 états
+  - état: position, vitesse
+  - prédiction par accel verticale (earth frame - gravité)
+  - correction par altitude baro filtrée
+
+---
+
+## 8) Contrôle roll -> tab
+
+Implémenté dans `src/drivers/roll.rs` et utilisé dans `src/main.rs`.
+
+### 8.1 Entrées RC
+- Roll stick: CH0 (normalisé [-1, +1])
+- Throttle: CH2
+- Arm: CH4 (`> 1200`)
+- Sélecteur ratio: CH5
+  - <=1500 => 10:1
+  - >1500 => 20:1
+
+### 8.2 Contrôleur roll (boucle attitude)
+- Type: PID simple sur erreur d'angle
+- Sortie bornée [-1, +1] (`output_limit`)
+- Damping via taux gyro roll
+
+### 8.3 Conversion en cible tab
+- `tab_target_deg = roll_output * 20°`
+- Saturation stricte à ±20°
+
+### 8.4 Contrôleur tab engrené
+- Modèle simple position moteur (open-loop)
+- Convertit angle tab cible en angle moteur cible avec ratio 10:1 ou 20:1
+- Génère commande moteur signée dans [-1, +1]
+- Estime position moteur/tab sans retour capteur
+
+Limitation importante:
+- Sans retour position (encodeur/potentiomètre), la précision absolue est limitée sous charge.
+
+---
+
+## 9) DShot300
+
+### 9.1 Driver
+`src/drivers/dshot.rs`:
+- Génère trame 16 bits (11-bit command + telemetry bit + checksum nibble)
+- Bit-bang timing via `cortex_m::asm::delay`
+- `send_command(command_11bit, telemetry)`
+
+### 9.2 Commandes
+- Mapping unidirectionnel: `unit_to_dshot`
+- Mapping 3D signé: `signed_unit_to_dshot_3d`
+  - positif: zone [1048..2047]
+  - négatif: zone [1047..48]
+
+### 9.3 Sécurité actuelle (très important)
+Dans `src/main.rs`:
+- `const ESC_OUTPUT_LOCKED: bool = true;`
+- Dans `dshot_tab_task`, commande forcée à 0
+- Dans la boucle main, commande TAB aussi forcée à 0 avant publication
+
+Conséquence:
+- Le moteur TAB ne tournera pas tant que ce verrou n'est pas explicitement retiré.
+
+---
+
+## 10) Télémétrie
+
+### 10.1 USB texte
+Paquets texte incluant notamment:
+- Température, pression, altitude, vitesse verticale
+- GPS lat/lon, sats
+- Tension batterie
+- Roll mesuré
+- Commandes DShot et état TAB
+
+Champs ajoutés côté TAB:
+- `B` : angle tab estimé (deg)
+- `D` : angle tab cible (deg)
+- `g` : gear ratio actif (10/20)
+- `M` : commande DShot tab
+- `Q` : direction signée tab (0/1)
+
+### 10.2 CRSF retour radio
+Frames périodiques:
+- Battery
+- GPS
+- Attitude
+- Vario
+- Barometer
+- Flight mode texte
+
+---
+
+## 11) Build / flash / runbook
+
+### 11.1 Build check rapide
+- `cargo check --target thumbv7em-none-eabihf`
+
+### 11.2 Script complet
+- `./flash_monitor.sh`
+  - Build via `cargo objcopy --release`
+  - Flash DFU: `dfu-util -a 0 -s 0x08000000:leave -D firmware.bin`
+  - Ouvre ensuite un moniteur série
+
+### 11.3 Prévol software minimal
+1. Confirmer `ESC_OUTPUT_LOCKED = true` pour tests capteurs
+2. Vérifier USB télémétrie reçue
+3. Vérifier channels CRSF (CH0/2/4/5)
+4. Vérifier angle roll cohérent quand on incline
+5. Vérifier que `M` reste 0 sous verrou
+
+---
+
+## 12) Sécurité matérielle (obligatoire)
+
+- Toujours tester sans hélice
+- Limiter courant alimentation (bench PSU si possible)
+- Ajouter fusible ou ampoule série lors premiers essais puissance
+- Vérifier sens moteur et ratio mécanique à la main avant autorisation couple
+- Ne jamais activer déverrouillage ESC sans kill-switch robuste
+
+Après incident de type "magic smoke":
+1. Débrancher immédiat LiPo
+2. Contrôler ESC, phases moteur, soudures, court-circuits
+3. Mesurer résistance phase-phase et phase-masse
+4. Repartir avec sortie ESC verrouillée
+
+---
+
+## 13) État sécurité actuel et prochaines étapes recommandées
+
+État actuel:
+- Sortie TAB motor logicielle verrouillée à 0
+- Build OK
+- Flash possible si toolchain installée correctement
+
+Avant réactivation moteur, implémenter au minimum:
+1. Armement 2 étapes (switch + throttle bas + délai)
+2. Deadband autour du neutre 3D
+3. Rampe de consigne (slew-rate limiter)
+4. Timeout RX (failsafe -> DShot 0)
+5. Journalisation événementielle arm/disarm/failsafe
+
+---
+
+## 14) Erreurs fréquentes et diagnostics
+
+### 14.1 `can't find crate for core`
+Cause: target ARM non installée.
+Fix:
+- `rustup target add thumbv7em-none-eabihf`
+
+### 14.2 `rustup: command not found`
+Cause: Rust système sans rustup.
+Fix Arch:
+- `sudo pacman -S --needed rustup`
+- `rustup default stable`
+
+### 14.3 Build ok mais moteur ne tourne pas
+Checklist:
+- Verrou logiciel actif ? (`ESC_OUTPUT_LOCKED`)
+- ESC en mode 3D/bidirectionnel configuré ?
+- Arm condition réelle validée (CH4)
+- DShot envoyé à fréquence suffisante (task 1 kHz)
+- Câblage sur PB0 correct
+
+---
+
+## 15) Contrat de vérité de ce document
+
+Ce document décrit l'état actuel du code du dépôt au moment de génération.
+Les sections les plus sensibles à vérifier après modifications futures:
+- `src/main.rs` (safety lock, task rates, pin mapping)
+- `src/drivers/roll.rs` (mappings commande)
+- `src/drivers/dshot.rs` (timings bit-bang)
+- `flash_monitor.sh` (toolchain/flash)
+
+Fin du document.
