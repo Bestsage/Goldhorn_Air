@@ -30,11 +30,10 @@ pub struct Mahony {
     iz: f32,
 
     pub q: Quaternion,
-    sample_freq: f32,
 }
 
 impl Mahony {
-    pub fn new(freq: f32) -> Self {
+    pub fn new() -> Self {
         Self {
             kp: 2.0,   // Default Kp
             ki: 0.005, // Default Ki (slightly higher for mag)
@@ -42,11 +41,10 @@ impl Mahony {
             iy: 0.0,
             iz: 0.0,
             q: Quaternion::default(),
-            sample_freq: freq,
         }
     }
 
-    pub fn update(&mut self, gx: f32, gy: f32, gz: f32, ax: f32, ay: f32, az: f32) {
+    pub fn update(&mut self, dt: f32, gx: f32, gy: f32, gz: f32, ax: f32, ay: f32, az: f32) {
         let mut q0 = self.q.w;
         let mut q1 = self.q.x;
         let mut q2 = self.q.y;
@@ -74,9 +72,9 @@ impl Mahony {
 
         // Compute and apply integral feedback if enabled
         if self.ki > 0.0 {
-            self.ix += self.ki * halfex * (1.0 / self.sample_freq);
-            self.iy += self.ki * halfey * (1.0 / self.sample_freq);
-            self.iz += self.ki * halfez * (1.0 / self.sample_freq);
+            self.ix += self.ki * halfex * dt;
+            self.iy += self.ki * halfey * dt;
+            self.iz += self.ki * halfez * dt;
         } else {
             self.ix = 0.0;
             self.iy = 0.0;
@@ -89,9 +87,9 @@ impl Mahony {
         let gz = gz + (self.kp * halfez + self.iz);
 
         // Integrate rate of change of quaternion
-        let gx = gx * (0.5 / self.sample_freq);
-        let gy = gy * (0.5 / self.sample_freq);
-        let gz = gz * (0.5 / self.sample_freq);
+        let gx = gx * (0.5 * dt);
+        let gy = gy * (0.5 * dt);
+        let gz = gz * (0.5 * dt);
 
         let qa = q0;
         let qb = q1;
@@ -112,6 +110,7 @@ impl Mahony {
 
     pub fn update_9dof(
         &mut self,
+        dt: f32,
         gx: f32,
         gy: f32,
         gz: f32,
@@ -169,9 +168,9 @@ impl Mahony {
                 let ez = (ax * vy - ay * vx) + (mx * wy - my * wx);
 
                 if self.ki > 0.0 {
-                    self.ix += self.ki * ex * (1.0 / self.sample_freq);
-                    self.iy += self.ki * ey * (1.0 / self.sample_freq);
-                    self.iz += self.ki * ez * (1.0 / self.sample_freq);
+                    self.ix += self.ki * ex * dt;
+                    self.iy += self.ki * ey * dt;
+                    self.iz += self.ki * ez * dt;
                 }
 
                 // Apply dynamic feedback
@@ -180,7 +179,7 @@ impl Mahony {
                 let gz = gz + (self.kp * ez + self.iz);
 
                 // Integrate rate of change of quaternion
-                let dt_05 = 0.5 / self.sample_freq;
+                let dt_05 = 0.5 * dt;
                 let (pa, pb, pc) = (q0, q1, q2);
                 q0 += (-pb * gx - pc * gy - q3 * gz) * dt_05;
                 q1 += (pa * gx + pc * gz - q3 * gy) * dt_05;
@@ -194,7 +193,7 @@ impl Mahony {
                 self.q.y = q2 * recip_norm;
                 self.q.z = q3 * recip_norm;
             } else {
-                self.update(gx, gy, gz, ax, ay, az);
+                self.update(dt, gx, gy, gz, ax, ay, az);
             }
         }
     }

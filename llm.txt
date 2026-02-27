@@ -93,7 +93,7 @@ Défini dans `src/board.rs`:
   - Flash W25Qxx
 
 ### 5.2 UART
-- GPS: USART3, RX PB11 / TX PB10, 9600 bauds
+- GPS: USART3, RX PB11 / TX PB10, 115200 bauds
 - CRSF/ELRS: UART4, RX PA1 / TX PA0, 420000 bauds
 
 ### 5.3 ADC et GPIO
@@ -226,8 +226,11 @@ Important:
 - `dshot_tab_task` : envoi DShot à période fixe
 
 ### 6.2 Fréquences principales
-- Boucle principale: ~20 Hz (`Timer::after(50 ms)`)
+- Boucle principale: ~20 Hz nominal (`Timer::after(50 ms)`)
+  - dt réel mesuré via `Instant::now()` à chaque itération
+  - Passé dynamiquement aux algorithmes (AHRS, Kalman, PID)
 - Task DShot: 1 kHz (`Timer::after(1000 us)`)
+  - Protégée par `critical_section::with()` contre les interruptions
 
 Note: l'envoi DShot à 20 Hz était insuffisant pour un ESC. Le passage à 1 kHz corrige ce point architectural.
 

@@ -1,4 +1,4 @@
-pub mod ahrs;
+pub mod ekf;
 
 pub mod crsf;
 pub mod dshot;

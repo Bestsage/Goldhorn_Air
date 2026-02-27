@@ -25,23 +25,27 @@ impl Dshot300 {
     }
 
     pub fn send_frame(&mut self, frame: u16) {
-        for bit in (0..16).rev() {
-            let one = ((frame >> bit) & 0x1) != 0;
+        // Disable interrupts during bit-bang to prevent timing corruption
+        // from UART/I2C/USB ISRs (~60µs critical window)
+        critical_section::with(|_cs| {
+            for bit in (0..16).rev() {
+                let one = ((frame >> bit) & 0x1) != 0;
 
-            self.pin.set_high();
-            if one {
-                asm::delay(Self::BIT1_HIGH_CYCLES);
-                self.pin.set_low();
-                asm::delay(Self::BIT1_LOW_CYCLES);
-            } else {
-                asm::delay(Self::BIT0_HIGH_CYCLES);
-                self.pin.set_low();
-                asm::delay(Self::BIT0_LOW_CYCLES);
+                self.pin.set_high();
+                if one {
+                    asm::delay(Self::BIT1_HIGH_CYCLES);
+                    self.pin.set_low();
+                    asm::delay(Self::BIT1_LOW_CYCLES);
+                } else {
+                    asm::delay(Self::BIT0_HIGH_CYCLES);
+                    self.pin.set_low();
+                    asm::delay(Self::BIT0_LOW_CYCLES);
+                }
             }
-        }
 
-        self.pin.set_low();
-        asm::delay(Self::FRAME_GAP_CYCLES);
+            self.pin.set_low();
+            asm::delay(Self::FRAME_GAP_CYCLES);
+        });
     }
 }
 
