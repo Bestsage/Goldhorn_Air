@@ -1,3 +1,0 @@
-cargo:rustc-link-search=/home/bestsage/Documents/Rocket_mcu/target/release/build/defmt-92b84de2897359ac/out
-cargo:rustc-check-cfg=cfg(c_variadic)
-cargo:rustc-check-cfg=cfg(no_cas)

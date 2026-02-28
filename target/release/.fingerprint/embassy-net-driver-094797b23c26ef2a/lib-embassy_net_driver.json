@@ -1,1 +1,0 @@
-{"rustc":5470738401306409665,"features":"[]","declared_features":"[\"defmt\"]","target":14519073274043579837,"profile":2040997289075261528,"path":17540363140911531009,"deps":[],"local":[{"CheckDepInfo":{"dep_info":"release/.fingerprint/embassy-net-driver-094797b23c26ef2a/dep-lib-embassy_net_driver","checksum":false}}],"rustflags":[],"config":2069994364910194474,"compile_kind":0}
