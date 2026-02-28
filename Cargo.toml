@@ -8,6 +8,11 @@ name = "flight-controller-rust"
 test = false
 bench = false
 
+[[bin]]
+name = "calibrate"
+test = false
+bench = false
+
 [dependencies]
 embassy-stm32 = { version = "0.1", features = ["stm32f405rg", "unstable-pac", "memory-x", "time-driver-any", "exti"] }
 embassy-executor = { version = "0.5", features = ["task-arena-size-65536", "arch-cortex-m", "executor-thread", "integrated-timers"] }
