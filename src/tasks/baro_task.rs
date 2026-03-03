@@ -7,7 +7,7 @@ use embassy_time::{Duration, Ticker};
 
 use crate::drivers::spl06::Spl06;
 use crate::state::BaroData;
-
+/// test pour yassine
 /// Barometer task — reads SPL06 at 20 Hz and sends BaroData to the fast loop.
 #[task]
 pub async fn baro_task(
